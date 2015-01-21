@@ -1,0 +1,70 @@
+{% extends "layout.html" %}
+
+{% block body %}
+    <form method="POST">
+        <table>
+            <tr>
+                <th>Hostname</th>
+                <th>IP</th>
+                <th>Port</th>
+                <th>Uptime</th>
+                <th>PID</th>
+                <th>Version</th>
+                <th>Queue</th>
+                <th>Consuming</th>
+                <th>Current Task</th>
+                <th>Args</th>
+                <th>Kwargs</th>
+                <th>Actions</th>
+            </tr>
+            {% for addr, worker in sockets|dictsort(by='value') %}
+            <tr>
+                <td>{{ worker.stats.hostname }}</td>
+                <td>{{ addr[0] }}</td>
+                <td>{{ addr[1] }}</td>
+                <td
+                  {# Higlight over working workers #}
+                  {% if manager.kuyruk.config.MAX_WORKER_RUN_TIME and worker.stats.uptime > manager.kuyruk.config.MAX_WORKER_RUN_TIME %}
+                    style="background-color: yellow"
+                  {% endif %}>
+
+                  {{ human_time(worker.stats.uptime) }}
+                </td>
+                <td>{{ worker.stats.pid }}</td>
+                <td>{{ worker.stats.version }}</td>
+                <td>{{ worker.stats.queue }}</td>
+                <td>{{ worker.stats.consuming }}</td>
+                <td>{{ worker.stats.current_task|default('', true) }}</td>
+                <td>{{ worker.stats.current_args|default('', true) }}</td>
+                <td>{{ worker.stats.current_kwargs|default('', true) }}</td>
+                <td>
+                    {{ action_button(addr, 'warm_shutdown', 'Shutdown') }}
+                    {{ action_button(addr, 'cold_shutdown', 'Abort') }}
+                    {{ action_button(addr, 'quit_task', 'Drop Task') }}
+                </td>
+            </tr>
+            {% endfor %}
+
+            {% if not request.args.ppid %}
+            <tr>
+                <td></td>
+                <td></td>
+                <td></td>
+                <td></td>
+                <td></td>
+                <td></td>
+                <td></td>
+                <td></td>
+                <td></td>
+                <td></td>
+                <td></td>
+                <td>
+                    {{ action_button_all('worker', 'warm_shutdown', 'Shutdown All') }}
+                    {{ action_button_all('worker', 'cold_shutdown', 'Abort All') }}
+                </td>
+            </tr>
+            {% endif %}
+        </table>
+        Count: {{ sockets|count }}
+    </form>
+{% endblock %}
