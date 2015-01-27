@@ -1,2 +1,2 @@
 include README.md LICENSE
-recursive-include templates *
+recursive-include kuyruk_manager/templates *
