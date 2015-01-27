@@ -131,10 +131,8 @@ class Manager(Flask):
         @self.route('/api/failed-tasks', endpoint="api_failed_tasks")
         def failed_tasks():
             tasks = self.requeue.redis.hvals('failed_tasks')
-            print tasks
             decoder = json.JSONDecoder()
             tasks = map(decoder.decode, tasks)
-            print "XXX", tasks
             if request.path.startswith("/api/"):
                 ret = {"tasks": tasks}
                 return jsonify(**ret)
