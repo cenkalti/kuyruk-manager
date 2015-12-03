@@ -28,7 +28,7 @@
                     style="background-color: yellow"
                   {% endif %}>
 
-                  {{ worker.stats.uptime|human_time }}
+                  {{ worker.stats.uptime|default(0)|human_time }}
                 </td>
                 <td>{{ worker.stats.pid }}</td>
                 <td>{{ worker.stats.version }}</td>

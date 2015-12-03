@@ -6,7 +6,6 @@ import threading
 from datetime import datetime
 from time import sleep
 from functools import total_ordering, wraps, partial
-from collections import defaultdict
 
 from flask import Flask, render_template, redirect, request, url_for, jsonify
 from werkzeug.serving import run_simple
@@ -221,7 +220,7 @@ def _manager_service_class(manager):
 
         def on_connect(self):
             print "Client connected:", self.addr
-            self.stats = defaultdict(None)
+            self.stats = {}
             manager.workers[self.addr] = self
             start_daemon_thread(target=self.read_stats)
 
