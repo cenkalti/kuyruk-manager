@@ -211,7 +211,7 @@ def _manager_service_class(manager):
 
         @property
         def sort_key(self):
-            order = ('hostname', 'queue', 'uptime', 'pid')
+            order = ('hostname', 'queues', 'uptime', 'pid')
             # TODO replace get_stat with operator.itemgetter
             return tuple(self.get_stat(attr) for attr in order)
 
@@ -259,7 +259,7 @@ def _worker_service_class(worker):
                 'current_args': worker.current_args,
                 'current_kwargs': worker.current_kwargs,
                 'consuming': worker.consuming,
-                'queue': worker.queue,
+                'queues': worker.queues,
             }
         exposed_warm_shutdown = worker.shutdown
         exposed_cold_shutdown = worker.manager_exit

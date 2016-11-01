@@ -10,7 +10,7 @@
                 <th>Uptime</th>
                 <th>PID</th>
                 <th>Version</th>
-                <th>Queue</th>
+                <th>Queues</th>
                 <th>Consuming</th>
                 <th>Current Task</th>
                 <th>Args</th>
@@ -32,7 +32,7 @@
                 </td>
                 <td>{{ worker.stats.pid }}</td>
                 <td>{{ worker.stats.version }}</td>
-                <td>{{ worker.stats.queue }}</td>
+                <td>{{ worker.stats.queues|join(', ') }}</td>
                 <td>{{ worker.stats.consuming }}</td>
                 <td>{{ worker.stats.current_task|default('', true) }}</td>
                 <td>{{ worker.stats.current_args|default('', true) }}</td>
