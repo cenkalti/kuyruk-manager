@@ -10,7 +10,7 @@
 {% macro _button(action, task_id, title) %}
     <button type="submit" name='task_id'
             value="{{ task_id }}"
-            formaction="{{ url_for('%s_task' % action) }}">
+            formaction="{{ url_for('kuyruk_manager.%s_task' % action) }}">
         {{ title }}</button>
 {% endmacro -%}
 

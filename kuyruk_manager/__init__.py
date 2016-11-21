@@ -95,14 +95,18 @@ class Manager(object):
         b = Blueprint("kuyruk_manager", __name__)
         b.add_url_rule('/', 'index', self._get_index)
         b.add_url_rule('/workers', 'workers', self._get_workers)
-        b.add_url_rule('/failed-tasks', 'failed-tasks',
+        b.add_url_rule('/failed-tasks', 'failed_tasks',
                        self._get_failed_tasks)
-        b.add_url_rule('/api/failed-tasks', 'api-failed-tasks',
+        b.add_url_rule('/api/failed-tasks', 'api_failed_tasks',
                        self._api_get_failed_tasks)
-        b.add_url_rule('/action', 'action', self._post_action)
-        b.add_url_rule('/action-all', 'action-all', self._post_action_all)
-        b.add_url_rule('/requeue', 'requeue', self._post_requeue)
-        b.add_url_rule('/delete', 'delete', self._post_delete)
+        b.add_url_rule('/action', 'action',
+                       self._post_action, methods=['POST'])
+        b.add_url_rule('/action-all', 'action_all',
+                       self._post_action_all, methods=['POST'])
+        b.add_url_rule('/requeue', 'requeue_task',
+                       self._post_requeue, methods=['POST'])
+        b.add_url_rule('/delete', 'delete_task',
+                       self._post_delete, methods=['POST'])
         b.context_processor(self._context_processors)
         return b
 
@@ -113,7 +117,7 @@ class Manager(object):
         return app
 
     def _get_index(self):
-        return redirect(url_for('workers'))
+        return redirect(url_for('kuyruk_manager.workers'))
 
     def _get_workers(self):
         return render_template('workers.html', sockets=self.workers)
