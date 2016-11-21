@@ -79,17 +79,16 @@ class Manager(object):
         if self.has_sentry and not kuyruk.config.SENTRY_PROJECT_URL:
             raise Exception("SENTRY_PROJECT_URL is not set")
 
-        self._rpc_server = ThreadedServer(_manager_service_class(self),
-                                          hostname=kuyruk.config.MANAGER_HOST,
-                                          port=kuyruk.config.MANAGER_PORT)
-
         worker_start.connect(start_rpc_thread, sender=kuyruk, weak=False)
         worker_init.connect(add_exit_method, sender=kuyruk, weak=False)
 
         kuyruk.extensions["manager"] = self
 
     def start_rpc_server(self):
-        start_daemon_thread(self._rpc_server.start)
+        s = ThreadedServer(_manager_service_class(self),
+                           hostname=kuyruk.config.MANAGER_HOST,
+                           port=kuyruk.config.MANAGER_PORT)
+        start_daemon_thread(s)
 
     def flask_blueprint(self):
         b = Blueprint("kuyruk_manager", __name__)
