@@ -7,7 +7,8 @@ from datetime import datetime
 from time import sleep
 from functools import total_ordering, wraps, partial
 
-from flask import Flask, render_template, redirect, request, url_for, jsonify
+from flask import Flask, Blueprint
+from flask import render_template, redirect, request, url_for, jsonify
 from werkzeug.serving import run_simple
 import rpyc
 from rpyc.utils.server import ThreadedServer
@@ -67,13 +68,10 @@ def add_exit_method(sender, worker=None):
     worker.manager_exit = partial(os._exit, 0)
 
 
-class Manager(Flask):
+class Manager(object):
 
     def __init__(self, kuyruk):
-        super(Manager, self).__init__(__name__)
-        self.debug = True
         self.kuyruk = kuyruk
-        kuyruk.extensions["manager"] = self
         self.workers = {}
         self.requeue = kuyruk.extensions.get("requeue")
 
@@ -81,118 +79,145 @@ class Manager(Flask):
         if self.has_sentry and not kuyruk.config.SENTRY_PROJECT_URL:
             raise Exception("SENTRY_PROJECT_URL is not set")
 
+        self._rpc_server = ThreadedServer(_manager_service_class(self),
+                                          hostname=kuyruk.config.MANAGER_HOST,
+                                          port=kuyruk.config.MANAGER_PORT)
+
         worker_start.connect(start_rpc_thread, sender=kuyruk, weak=False)
         worker_init.connect(add_exit_method, sender=kuyruk, weak=False)
 
-        @self.route('/')
-        def index():
-            return redirect(url_for('workers'))
+        kuyruk.extensions["manager"] = self
 
-        @self.route('/workers')
-        def workers():
-            return render_template('workers.html', sockets=self.workers)
+    def start_rpc_server(self):
+        start_daemon_thread(self._rpc_server.start)
 
-        @self.route('/failed-tasks')
-        @self.route('/api/failed-tasks', endpoint="api_failed_tasks")
-        def failed_tasks():
-            tasks = self.requeue.redis.hvals('failed_tasks')
-            decoder = json.JSONDecoder()
-            tasks = map(decoder.decode, tasks)
-            if request.path.startswith("/api/"):
-                ret = {"tasks": tasks}
-                return jsonify(**ret)
-            return render_template('failed_tasks.html', tasks=tasks)
+    def flask_blueprint(self):
+        b = Blueprint("kuyruk_manager", __name__)
+        b.add_url_rule('/', 'index', self._get_index)
+        b.add_url_rule('/workers', 'workers', self._get_workers)
+        b.add_url_rule('/failed-tasks', 'failed-tasks',
+                       self._get_failed_tasks)
+        b.add_url_rule('/api/failed-tasks', 'api-failed-tasks',
+                       self._api_get_failed_tasks)
+        b.add_url_rule('/action', 'action', self._post_action)
+        b.add_url_rule('/action-all', 'action-all', self._post_action_all)
+        b.add_url_rule('/requeue', 'requeue', self._post_requeue)
+        b.add_url_rule('/delete', 'delete', self._post_delete)
+        b.context_processor(self._context_processors)
+        return b
 
-        @self.route('/action', methods=['POST'])
-        def action():
-            addr = (request.args['host'], int(request.args['port']))
-            client = self.workers[addr]
+    def flask_application(self):
+        app = Flask(__name__)
+        app.debug = True
+        app.register_blueprint(self.flask_blueprint())
+        return app
+
+    def _get_index(self):
+        return redirect(url_for('workers'))
+
+    def _get_workers(self):
+        return render_template('workers.html', sockets=self.workers)
+
+    def _failed_tasks(self):
+        tasks = self.requeue.redis.hvals('failed_tasks')
+        decoder = json.JSONDecoder()
+        tasks = map(decoder.decode, tasks)
+        return tasks
+
+    def _get_failed_tasks(self):
+        return render_template('failed_tasks.html', tasks=self._failed_tasks())
+
+    def _api_get_failed_tasks(self):
+        return jsonify(tasks=self._failed_tasks())
+
+    def _post_action(self):
+        addr = (request.args['host'], int(request.args['port']))
+        client = self.workers[addr]
+        f = getattr(client._conn.root, request.form['action'])
+        rpyc.async(f)()
+        sleep(ACTION_WAIT_TIME)
+        return redirect_back()
+
+    def _post_action_all(self):
+        for addr, client in self.workers.items():
             f = getattr(client._conn.root, request.form['action'])
             rpyc.async(f)()
-            sleep(ACTION_WAIT_TIME)
-            return redirect_back()
+        sleep(ACTION_WAIT_TIME)
+        return redirect_back()
 
-        @self.route('/action_all', methods=['POST'])
-        def action_all():
-            for addr, client in self.workers.items():
-                f = getattr(client._conn.root, request.form['action'])
-                rpyc.async(f)()
-            sleep(ACTION_WAIT_TIME)
-            return redirect_back()
+    def _post_requeue(self):
+        task_id = request.form['task_id']
+        redis = self.requeue.redis
 
-        @self.route('/requeue', methods=['POST'])
-        def requeue_task():
-            task_id = request.form['task_id']
-            redis = self.requeue.redis
+        if task_id == 'ALL':
+            self.requeue.requeue_failed_tasks()
+        else:
+            failed = redis.hget('failed_tasks', task_id)
+            failed = json.loads(failed)
+            self.requeue.requeue_task(failed)
 
-            if task_id == 'ALL':
-                self.requeue.requeue_failed_tasks()
-            else:
-                failed = redis.hget('failed_tasks', task_id)
-                failed = json.loads(failed)
-                self.requeue.requeue_task(failed)
+        return redirect_back()
 
-            return redirect_back()
+    def _post_delete(self):
+        task_id = request.form['task_id']
+        self.requeue.redis.hdel('failed_tasks', task_id)
+        return redirect_back()
 
-        @self.route('/delete', methods=['POST'])
-        def delete_task():
-            task_id = request.form['task_id']
-            self.requeue.redis.hdel('failed_tasks', task_id)
-            return redirect_back()
+    def _context_processors(self):
+        return {
+            'manager': self,
+            'now': str(datetime.utcnow())[:19],
+            'hostname': socket.gethostname(),
+            'has_requeue': self.requeue is not None,
+            'has_sentry': self.has_sentry,
+            'sentry_url': self._sentry_url,
+            'human_time': self._human_time,
+        }
 
-        @self.context_processor
-        def inject_helpers():
-            return {
-                'manager': self,
-                'now': str(datetime.utcnow())[:19],
-                'hostname': socket.gethostname(),
-                'has_requeue': self.requeue is not None,
-                'has_sentry': self.has_sentry,
-            }
+    def _sentry_url(self, sentry_id):
+        if not sentry_id:
+            return
 
-        @self.template_filter('sentry_url')
-        def do_sentry_url(sentry_id):
-            if sentry_id:
-                url = self.kuyruk.config.SENTRY_PROJECT_URL
-                if not url.endswith('/'):
-                    url += '/'
-                url += '?query=%s' % sentry_id
-                return url
+        url = self.kuyruk.config.SENTRY_PROJECT_URL
+        if not url.endswith('/'):
+            url += '/'
 
-        @self.template_filter('human_time')
-        def do_human_time(seconds, suffixes=['y', 'w', 'd', 'h', 'm', 's'],
-                          add_s=False, separator=' '):
-            """
-            Takes an amount of seconds and
-            turns it into a human-readable amount of time.
+        url += '?query=%s' % sentry_id
+        return url
 
-            """
-            # the formatted time string to be returned
-            time = []
+    def _human_time(self, seconds, suffixes=['y', 'w', 'd', 'h', 'm', 's'],
+                    add_s=False, separator=' '):
+        """
+        Takes an amount of seconds and
+        turns it into a human-readable amount of time.
 
-            # the pieces of time to iterate over (days, hours, minutes, etc)
-            # - the first piece in each tuple is the suffix (d, h, w)
-            # - the second piece is the length in seconds (a day is 60s * 60m * 24h)
-            parts = [
-                (suffixes[0], 60 * 60 * 24 * 7 * 52),
-                (suffixes[1], 60 * 60 * 24 * 7),
-                (suffixes[2], 60 * 60 * 24),
-                (suffixes[3], 60 * 60),
-                (suffixes[4], 60),
-                (suffixes[5], 1)]
+        """
+        # the formatted time string to be returned
+        time = []
 
-            # for each time piece, grab the value and remaining seconds, and add it to
-            # the time string
-            for suffix, length in parts:
-                value = seconds / length
-                if value > 0:
-                    seconds %= length
-                    time.append('%s%s' % (str(value),
-                                (suffix, (suffix, suffix + 's')[value > 1])[add_s]))
-                if seconds < 1:
-                    break
+        # the pieces of time to iterate over (days, hours, minutes, etc)
+        # the first piece in each tuple is the suffix (d, h, w)
+        # the second piece is the length in seconds (a day is 60s * 60m * 24h)
+        parts = [
+            (suffixes[0], 60 * 60 * 24 * 7 * 52),
+            (suffixes[1], 60 * 60 * 24 * 7),
+            (suffixes[2], 60 * 60 * 24),
+            (suffixes[3], 60 * 60),
+            (suffixes[4], 60),
+            (suffixes[5], 1)]
 
-            return separator.join(time)
+        # for each time piece, grab the value and remaining seconds,
+        # and add it to the time string
+        for suffix, length in parts:
+            value = seconds / length
+            if value > 0:
+                seconds %= length
+                time.append('%s%s' % (str(value), (
+                    suffix, (suffix, suffix + 's')[value > 1])[add_s]))
+            if seconds < 1:
+                break
+
+        return separator.join(time)
 
 
 def redirect_back():
@@ -231,7 +256,8 @@ def _manager_service_class(manager):
         def read_stats(self):
             while True:
                 try:
-                    self.stats = rpyc.classic.obtain(self._conn.root.get_stats())
+                    s = self._conn.root.get_stats()
+                    self.stats = rpyc.classic.obtain(s)
                 except Exception as e:
                     print e
                     try:
@@ -268,14 +294,13 @@ def _worker_service_class(worker):
 
 def run_manager(kuyruk, args):
     manager = kuyruk.extensions["manager"]
-    server = ThreadedServer(_manager_service_class(manager),
-                            hostname=kuyruk.config.MANAGER_HOST,
-                            port=kuyruk.config.MANAGER_PORT)
-    t = start_daemon_thread(server.start)
-    logger.info("Manager running in thread: %s", t.name)
+    manager.start_rpc_server()
+
+    app = manager.flask_application()
     run_simple(kuyruk.config.MANAGER_HOST,
                kuyruk.config.MANAGER_HTTP_PORT,
-               manager, threaded=True, use_debugger=True)
+               app, threaded=True, use_debugger=True)
+
 
 help_text = "see and manage kuyruk workers"
 

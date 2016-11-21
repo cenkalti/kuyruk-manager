@@ -1,7 +1,7 @@
 {% extends "layout.html" %}
 
 {% macro sentry_link(id, title) %}
-    {% set url = id|sentry_url %}
+    {% set url = sentry_url(id) %}
     {% if url %}
         <a href="{{ url }}">{{ title }}</a>
     {% endif %}
