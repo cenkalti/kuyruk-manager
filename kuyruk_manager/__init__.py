@@ -86,8 +86,8 @@ class Manager(object):
 
     def start_rpc_server(self):
         s = ThreadedServer(_manager_service_class(self),
-                           hostname=kuyruk.config.MANAGER_HOST,
-                           port=kuyruk.config.MANAGER_PORT)
+                           hostname=self.kuyruk.config.MANAGER_HOST,
+                           port=self.kuyruk.config.MANAGER_PORT)
         start_daemon_thread(s)
 
     def flask_blueprint(self):
