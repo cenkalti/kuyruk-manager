@@ -88,7 +88,7 @@ class Manager(object):
         s = ThreadedServer(_manager_service_class(self),
                            hostname=self.kuyruk.config.MANAGER_HOST,
                            port=self.kuyruk.config.MANAGER_PORT)
-        start_daemon_thread(s)
+        start_daemon_thread(s.start)
 
     def flask_blueprint(self):
         b = Blueprint("kuyruk_manager", __name__)
