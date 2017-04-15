@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
     name='Kuyruk-Manager',
-    version="1.1.4",
+    version="1.2.0",
     author=u'Cenk Altı',
     author_email='cenkalti@gmail.com',
     keywords='kuyruk manager',
@@ -20,4 +20,14 @@ setup(
                   'kuyruk.commands': 'manager = kuyruk_manager:__init__.command'},
     description='Manage Kuyruk workers.',
     long_description=open('README.md').read(),
+    classifiers=[
+        'Development Status :: 5 - Production/Stable',
+        'License :: OSI Approved :: MIT License',
+        'Operating System :: OS Independent',
+        'Programming Language :: Python',
+        'Programming Language :: Python :: 2.7',
+        'Programming Language :: Python :: 3',
+        'Topic :: Software Development :: Object Brokering',
+        'Topic :: System :: Distributed Computing',
+    ],
 )

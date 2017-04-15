@@ -1,3 +1,4 @@
+from __future__ import division
 import json
 import os
 import socket
@@ -212,7 +213,7 @@ class Manager(object):
         # for each time piece, grab the value and remaining seconds,
         # and add it to the time string
         for suffix, length in parts:
-            value = seconds / length
+            value = seconds // length
             if value > 0:
                 seconds %= length
                 time.append('%s%s' % (str(value), (
@@ -247,13 +248,13 @@ def _manager_service_class(manager):
             return self._conn._config['endpoints'][1]
 
         def on_connect(self):
-            print "Client connected:", self.addr
+            logger.info("Client connected: %s", self.addr)
             self.stats = {}
             manager.workers[self.addr] = self
             start_daemon_thread(target=self.read_stats)
 
         def on_disconnect(self):
-            print "Client disconnected:", self.addr
+            logger.info("Client disconnected: %s", self.addr)
             del manager.workers[self.addr]
 
         def read_stats(self):
@@ -262,7 +263,7 @@ def _manager_service_class(manager):
                     s = self._conn.root.get_stats()
                     self.stats = rpyc.classic.obtain(s)
                 except Exception as e:
-                    print e
+                    logger.error("%s", e)
                     try:
                         self._conn.close()
                     except Exception:
