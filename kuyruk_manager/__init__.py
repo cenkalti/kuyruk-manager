@@ -235,6 +235,12 @@ def _manager_service_class(manager):
     @total_ordering
     class _Service(rpyc.Service):
         def __lt__(self, other):
+            if not self.sort_key:
+                return False
+
+            if not other.sort_key:
+                return True
+
             return self.sort_key < other.sort_key
 
         @property
