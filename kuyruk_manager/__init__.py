@@ -129,7 +129,8 @@ class Manager(object):
         return tasks
 
     def _get_failed_tasks(self):
-        return render_template('failed_tasks.html', tasks=self._failed_tasks())
+        tasks = list(self._failed_tasks())
+        return render_template('failed_tasks.html', tasks=tasks)
 
     def _api_get_failed_tasks(self):
         return jsonify(tasks=self._failed_tasks())
