@@ -10,7 +10,7 @@ from functools import total_ordering, wraps, partial
 
 from flask import Flask, Blueprint
 from flask import render_template, redirect, request, url_for, jsonify
-from werkzeug.serving import run_simple
+import waitress
 import rpyc
 from rpyc.utils.server import ThreadedServer
 
@@ -242,7 +242,13 @@ def _manager_service_class(manager):
             if not other.sort_key:
                 return True
 
-            return self.sort_key < other.sort_key
+            # TODO there is a bug with this comparison statement.
+            # Eat the error until the fix.
+            #   TypeError: unorderable types: NoneType() < str()
+            try:
+                return self.sort_key < other.sort_key
+            except Exception:
+                return True
 
         @property
         def sort_key(self):
@@ -308,9 +314,8 @@ def run_manager(kuyruk, args):
     manager.start_rpc_server()
 
     app = manager.flask_application()
-    run_simple(kuyruk.config.MANAGER_HOST,
-               kuyruk.config.MANAGER_HTTP_PORT,
-               app, threaded=True, use_debugger=True)
+    waitress.serve(app, host=kuyruk.config.MANAGER_HOST,
+                        port=kuyruk.config.MANAGER_HTTP_PORT)
 
 
 help_text = "see and manage kuyruk workers"
