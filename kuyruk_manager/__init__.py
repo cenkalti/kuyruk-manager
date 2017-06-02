@@ -141,6 +141,7 @@ class Manager(object):
 
     def _failed_tasks(self):
         tasks = self.requeue.redis.hvals('failed_tasks')
+        tasks = [t.decode('utf-8') for t in tasks]
         decoder = json.JSONDecoder()
         tasks = map(decoder.decode, tasks)
         return tasks
