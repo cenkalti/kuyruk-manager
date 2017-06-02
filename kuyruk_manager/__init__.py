@@ -127,13 +127,13 @@ class Manager(object):
 
         workers = {}
         for addr, worker in self.workers.items():
-            if hostname and hostname != worker.stats['hostname']:
+            if hostname and hostname != worker.stats.get('hostname', ''):
                 continue
-            if queue and queue not in worker.stats['queues']:
+            if queue and queue not in worker.stats.get('queues', []):
                 continue
-            if consuming and not worker.stats['consuming']:
+            if consuming and not worker.stats.get('consuming', False):
                 continue
-            if working and not worker.stats['current_task']:
+            if working and not worker.stats.get('current_task', None):
                 continue
             workers[addr] = worker
 
