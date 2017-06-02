@@ -120,7 +120,24 @@ class Manager(object):
         return redirect(url_for('kuyruk_manager.workers'))
 
     def _get_workers(self):
-        return render_template('workers.html', sockets=self.workers)
+        hostname = request.args.get('hostname')
+        queue = request.args.get('queue')
+        consuming = request.args.get('consuming')
+        working = request.args.get('working')
+
+        workers = {}
+        for addr, worker in self.workers.items():
+            if hostname and hostname != worker.stats['hostname']:
+                continue
+            if queue and queue not in worker.stats['queues']:
+                continue
+            if consuming and not worker.stats['consuming']:
+                continue
+            if working and not worker.stats['current_task']:
+                continue
+            workers[addr] = worker
+
+        return render_template('workers.html', sockets=workers)
 
     def _failed_tasks(self):
         tasks = self.requeue.redis.hvals('failed_tasks')
