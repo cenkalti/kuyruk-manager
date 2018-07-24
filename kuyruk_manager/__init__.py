@@ -56,7 +56,7 @@ def retry(sleep_seconds=1, stop_event=threading.Event(),
 def _connect_rpc(worker):
     conn = rpyc.connect(worker.kuyruk.config.MANAGER_HOST,
                         worker.kuyruk.config.MANAGER_PORT,
-                        service=_worker_service_class(worker),
+                        service=_WorkerService(worker),
                         config={"allow_pickle": True})
     rpyc.BgServingThread(conn)._thread.join()
 
@@ -73,7 +73,7 @@ class Manager(object):
 
     def __init__(self, kuyruk):
         self.kuyruk = kuyruk
-        self.workers = {}
+        self.service = _ManagerService()
         self.requeue = kuyruk.extensions.get("requeue")
 
         self.has_sentry = "sentry" in kuyruk.extensions
@@ -86,7 +86,7 @@ class Manager(object):
         kuyruk.extensions["manager"] = self
 
     def start_rpc_server(self):
-        s = ThreadedServer(_manager_service_class(self),
+        s = ThreadedServer(self.service,
                            hostname=self.kuyruk.config.MANAGER_HOST,
                            port=self.kuyruk.config.MANAGER_PORT)
         start_daemon_thread(s.start)
@@ -126,7 +126,7 @@ class Manager(object):
         working = request.args.get('working')
 
         workers = {}
-        for addr, worker in self.workers.items():
+        for addr, worker in self.service.workers.items():
             if hostname and hostname != worker.stats.get('hostname', ''):
                 continue
             if queue and queue not in worker.stats.get('queues', []):
@@ -155,16 +155,16 @@ class Manager(object):
 
     def _post_action(self):
         addr = (request.args['host'], int(request.args['port']))
-        client = self.workers[addr]
-        f = getattr(client._conn.root, request.form['action'])
-        rpyc.async(f)()
+        worker = self.service.workers[addr]
+        f = getattr(worker.conn.root, request.form['action'])
+        rpyc.async_(f)()
         sleep(ACTION_WAIT_TIME)
         return redirect_back()
 
     def _post_action_all(self):
-        for addr, client in self.workers.items():
-            f = getattr(client._conn.root, request.form['action'])
-            rpyc.async(f)()
+        for addr, worker in self.service.workers.items():
+            f = getattr(worker.conn.root, request.form['action'])
+            rpyc.async_(f)()
         sleep(ACTION_WAIT_TIME)
         return redirect_back()
 
@@ -250,81 +250,95 @@ def redirect_back():
     return 'Go back'
 
 
-def _manager_service_class(manager):
-    @total_ordering
-    class _Service(rpyc.Service):
-        def __lt__(self, other):
-            if not self.sort_key:
-                return False
+class _ManagerService(rpyc.Service):
+    def __init__(self):
+        self.workers = {}
+        super().__init__()
 
-            if not other.sort_key:
-                return True
+    def on_connect(self, conn):
+        addr = conn._config['endpoints'][1]
+        logger.info("Client connected: %s", addr)
+        worker = _Worker(conn)
+        start_daemon_thread(target=worker._read_stats)
+        self.workers[addr] = worker
 
-            # TODO there is a bug with this comparison statement.
-            # Eat the error until the fix.
-            #   TypeError: unorderable types: NoneType() < str()
+    def on_disconnect(self, conn):
+        addr = conn._config['endpoints'][1]
+        logger.info("Client disconnected: %s", addr)
+        del self.workers[addr]
+
+
+class _WorkerService(rpyc.Service):
+    def __init__(self, worker):
+        self.worker = worker
+        super().__init__()
+
+    def exposed_warm_shutdown(self):
+        return self.worker.shutdown()
+
+    def exposed_cold_shutdown(self):
+        return self.worker.manager_exit()
+
+    def exposed_quit_task(self):
+        return self.worker.drop_task()
+
+    def exposed_get_stats(self):
+        return {
+            'hostname': socket.gethostname(),
+            'uptime': int(self.worker.uptime),
+            'pid': os.getpid(),
+            'version': kuyruk.__version__,
+            'current_task': getattr(self.worker.current_task, "name", None),
+            'current_args': self.worker.current_args,
+            'current_kwargs': self.worker.current_kwargs,
+            'consuming': self.worker.consuming,
+            'queues': self.worker.queues,
+        }
+
+    def get_stat(self, name):
+        return self.stats.get(name, None)
+
+
+@total_ordering
+class _Worker:
+    def __init__(self, conn):
+        self.conn = conn
+        self.stats = {}
+
+    def __lt__(self, other):
+        if not self.sort_key:
+            return False
+
+        if not other.sort_key:
+            return True
+
+        # TODO there is a bug with this comparison statement.
+        # Eat the error until the fix.
+        #   TypeError: unorderable types: NoneType() < str()
+        try:
+            return self.sort_key < other.sort_key
+        except Exception:
+            return True
+
+    def _read_stats(self):
+        while True:
             try:
-                return self.sort_key < other.sort_key
-            except Exception:
-                return True
-
-        @property
-        def sort_key(self):
-            order = ('hostname', 'queues', 'uptime', 'pid')
-            # TODO replace get_stat with operator.itemgetter
-            return tuple(self.get_stat(attr) for attr in order)
-
-        @property
-        def addr(self):
-            return self._conn._config['endpoints'][1]
-
-        def on_connect(self):
-            logger.info("Client connected: %s", self.addr)
-            self.stats = {}
-            manager.workers[self.addr] = self
-            start_daemon_thread(target=self.read_stats)
-
-        def on_disconnect(self):
-            logger.info("Client disconnected: %s", self.addr)
-            del manager.workers[self.addr]
-
-        def read_stats(self):
-            while True:
+                proxy_obj = self.conn.root.get_stats()
+                self.stats = rpyc.classic.obtain(proxy_obj)
+            except Exception as e:
+                logger.error("%s", e)
                 try:
-                    s = self._conn.root.get_stats()
-                    self.stats = rpyc.classic.obtain(s)
-                except Exception as e:
-                    logger.error("%s", e)
-                    try:
-                        self._conn.close()
-                    except Exception:
-                        pass
-                    return
-                sleep(1)
+                    self.conn.close()
+                except Exception:
+                    pass
+                return
+            sleep(1)
 
-        def get_stat(self, name):
-            return self.stats.get(name, None)
-    return _Service
-
-
-def _worker_service_class(worker):
-    class _Service(rpyc.Service):
-        def exposed_get_stats(self):
-            return {
-                'hostname': socket.gethostname(),
-                'uptime': int(worker.uptime),
-                'pid': os.getpid(),
-                'version': kuyruk.__version__,
-                'current_task': getattr(worker.current_task, "name", None),
-                'current_args': worker.current_args,
-                'current_kwargs': worker.current_kwargs,
-                'consuming': worker.consuming,
-                'queues': worker.queues,
-            }
-        exposed_warm_shutdown = worker.shutdown
-        exposed_cold_shutdown = worker.manager_exit
-        exposed_quit_task = worker.drop_task
-    return _Service
+    @property
+    def sort_key(self):
+        order = ('hostname', 'queues', 'uptime', 'pid')
+        # TODO replace get_stat with operator.itemgetter
+        return tuple(self.get_stat(attr) for attr in order)
 
 
 def run_manager(kuyruk, args):
@@ -332,8 +346,10 @@ def run_manager(kuyruk, args):
     manager.start_rpc_server()
 
     app = manager.flask_application()
-    waitress.serve(app, host=kuyruk.config.MANAGER_HOST,
-                        port=kuyruk.config.MANAGER_HTTP_PORT)
+    waitress.serve(
+            app,
+            host=kuyruk.config.MANAGER_HOST,
+            port=kuyruk.config.MANAGER_HTTP_PORT)
 
 
 help_text = "see and manage kuyruk workers"
