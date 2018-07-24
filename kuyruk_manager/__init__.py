@@ -295,9 +295,6 @@ class _WorkerService(rpyc.Service):
             'queues': self.worker.queues,
         }
 
-    def get_stat(self, name):
-        return self.stats.get(name, None)
-
 
 @total_ordering
 class _Worker:
@@ -339,6 +336,9 @@ class _Worker:
         order = ('hostname', 'queues', 'uptime', 'pid')
         # TODO replace get_stat with operator.itemgetter
         return tuple(self.get_stat(attr) for attr in order)
+
+    def get_stat(self, name):
+        return self.stats.get(name, None)
 
 
 def run_manager(kuyruk, args):
