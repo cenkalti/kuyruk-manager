@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
     name='Kuyruk-Manager',
-    version="1.5.0",
+    version="1.5.1",
     author=u'Cenk Altı',
     author_email='cenkalti@gmail.com',
     keywords='kuyruk manager',
@@ -11,7 +11,7 @@ setup(
     packages=["kuyruk_manager"],
     include_package_data=True,
     install_requires=[
-        'kuyruk>=9.1',
+        'kuyruk>=6.0.0',
         'redis>=2.10',
         'Flask>=0.10',
         'rpyc>=4.0',
