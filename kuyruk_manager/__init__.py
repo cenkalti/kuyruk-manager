@@ -24,6 +24,7 @@ CONFIG = {
     "MANAGER_PORT": 16501,
     "MANAGER_LISTEN_HOST": "127.0.0.1",
     "MANAGER_LISTEN_PORT": 16501,
+    "MANAGER_LISTEN_HOST_HTTP": "127.0.0.1",
     "MANAGER_LISTEN_PORT_HTTP": 16500,
     "SENTRY_PROJECT_URL": None,
 }
@@ -350,7 +351,7 @@ def run_manager(kuyruk, args):
     app = manager.flask_application()
     waitress.serve(
             app,
-            host=kuyruk.config.MANAGER_LISTEN_HOST,
+            host=kuyruk.config.MANAGER_LISTEN_HOST_HTTP,
             port=kuyruk.config.MANAGER_LISTEN_PORT_HTTP)
 
 
