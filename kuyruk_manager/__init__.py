@@ -22,7 +22,9 @@ logger = logging.getLogger(__name__)
 CONFIG = {
     "MANAGER_HOST": "127.0.0.1",
     "MANAGER_PORT": 16501,
-    "MANAGER_HTTP_PORT": 16500,
+    "MANAGER_LISTEN_HOST": "127.0.0.1",
+    "MANAGER_LISTEN_PORT": 16501,
+    "MANAGER_LISTEN_PORT_HTTP": 16500,
     "SENTRY_PROJECT_URL": None,
 }
 
@@ -87,8 +89,8 @@ class Manager(object):
 
     def start_rpc_server(self):
         s = ThreadedServer(self.service,
-                           hostname=self.kuyruk.config.MANAGER_HOST,
-                           port=self.kuyruk.config.MANAGER_PORT)
+                           hostname=self.kuyruk.config.MANAGER_LISTEN_HOST,
+                           port=self.kuyruk.config.MANAGER_LISTEN_PORT)
         start_daemon_thread(s.start)
 
     def flask_blueprint(self):
@@ -348,8 +350,8 @@ def run_manager(kuyruk, args):
     app = manager.flask_application()
     waitress.serve(
             app,
-            host=kuyruk.config.MANAGER_HOST,
-            port=kuyruk.config.MANAGER_HTTP_PORT)
+            host=kuyruk.config.MANAGER_LISTEN_HOST,
+            port=kuyruk.config.MANAGER_LISTEN_PORT_HTTP)
 
 
 help_text = "see and manage kuyruk workers"
