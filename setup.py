@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
     name='Kuyruk-Manager',
-    version="2.0.0",
+    version="2.0.1",
     author=u'Cenk Altı',
     author_email='cenkalti@gmail.com',
     keywords='kuyruk manager',
