@@ -81,9 +81,10 @@ def _connect(worker):
                                reply_to='amq.rabbitmq.reply-to')
             ch.basic_publish(msg, routing_key='kuyruk_manager')
             try:
+                ch.connection.heartbeat_tick()
                 ch.connection.drain_events(timeout=1)
             except socket.timeout:
-                ch.connection.heartbeat_tick()
+                pass
 
         msg = amqp.Message(type='shutdown', reply_to='amq.rabbitmq.reply-to')
         ch.basic_publish(msg, routing_key='kuyruk_manager')
@@ -116,9 +117,10 @@ class Manager:
                              callback=self._handle_worker_message)
             while True:
                 try:
+                    ch.connection.heartbeat_tick()
                     ch.connection.drain_events(timeout=1)
                 except socket.timeout:
-                    ch.connection.heartbeat_tick()
+                    pass
 
     def _handle_worker_message(self, message):
         message_type = message.type
