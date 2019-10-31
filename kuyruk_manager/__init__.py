@@ -28,15 +28,16 @@ CONFIG = {
 ACTION_WAIT_TIME = 1  # seconds
 
 
-def start_thread(target, args=(), daemon=False):
+def start_thread(target, args=(), daemon=False, stop_event=threading.Event()):
+    target = _retry(stop_event=stop_event)(target)
     t = threading.Thread(target=target, args=args)
     t.daemon = daemon
     t.start()
     return t
 
 
-def retry(sleep_seconds=1, stop_event=threading.Event(),
-          on_exception=lambda e: logger.error(e)):
+def _retry(sleep_seconds=1, stop_event=threading.Event(),
+           on_exception=lambda e: logger.error(e)):
     def decorator(f):
         @wraps(f)
         def inner(*args, **kwargs):
@@ -89,8 +90,7 @@ def _connect(worker):
 
 
 def start_connector(sender, worker=None):
-    target = retry(stop_event=worker.shutdown_pending)(_connect)
-    start_thread(target, args=(worker, ))
+    start_thread(_connect, args=(worker, ), stop_event=worker.shutdown_pending)
 
 
 class Manager:
