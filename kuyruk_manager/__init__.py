@@ -1,29 +1,25 @@
 from __future__ import division
-import json
 import os
+import json
 import socket
 import logging
+import operator
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from time import sleep
 from functools import total_ordering, wraps, partial
 
+import amqp
 from flask import Flask, Blueprint
 from flask import render_template, redirect, request, url_for, jsonify
 import waitress
-import rpyc
-from rpyc.utils.server import ThreadedServer
 
 import kuyruk
-from kuyruk.signals import worker_start, worker_init
+from kuyruk.signals import worker_init, worker_start
 
 logger = logging.getLogger(__name__)
 
 CONFIG = {
-    "MANAGER_HOST": "127.0.0.1",
-    "MANAGER_PORT": 16501,
-    "MANAGER_LISTEN_HOST": "127.0.0.1",
-    "MANAGER_LISTEN_PORT": 16501,
     "MANAGER_LISTEN_HOST_HTTP": "127.0.0.1",
     "MANAGER_LISTEN_PORT_HTTP": 16500,
     "SENTRY_PROJECT_URL": None,
@@ -32,15 +28,15 @@ CONFIG = {
 ACTION_WAIT_TIME = 1  # seconds
 
 
-def start_daemon_thread(target, args=()):
+def start_thread(target, args=(), daemon=False):
     t = threading.Thread(target=target, args=args)
-    t.daemon = True
+    t.daemon = daemon
     t.start()
     return t
 
 
 def retry(sleep_seconds=1, stop_event=threading.Event(),
-          on_exception=lambda e: logger.debug(e)):
+          on_exception=lambda e: logger.error(e)):
     def decorator(f):
         @wraps(f)
         def inner(*args, **kwargs):
@@ -56,43 +52,104 @@ def retry(sleep_seconds=1, stop_event=threading.Event(),
     return decorator
 
 
-def _connect_rpc(worker):
-    conn = rpyc.connect(worker.kuyruk.config.MANAGER_HOST,
-                        worker.kuyruk.config.MANAGER_PORT,
-                        service=_WorkerService(worker),
-                        config={"allow_pickle": True})
-    rpyc.BgServingThread(conn)._thread.join()
+def _connect(worker):
+    def handle_manager_message(message):
+        logger.info("Action received from manager: %s", message.body)
+        message = json.loads(message.body)
+        action = message['action']
+        handlers = {
+                'warm_shutdown': worker.shutdown,
+                'cold_shutdown': partial(os._exit, 0),
+                'quit_task': worker.drop_task,
+        }
+        try:
+            handler = handlers[action]
+        except KeyError:
+            logger.error("Unknown action: %s", action)
+            return
+
+        handler()
+
+    with worker.kuyruk.channel() as ch:
+        ch.basic_consume('amq.rabbitmq.reply-to', no_ack=True,
+                         callback=handle_manager_message)
+        while not worker.shutdown_pending.is_set():
+            stats = _get_stats(worker)
+            body = json.dumps(stats)
+            msg = amqp.Message(body=body, type='stats',
+                               reply_to='amq.rabbitmq.reply-to')
+            ch.basic_publish(msg, routing_key='kuyruk_manager')
+            try:
+                ch.connection.drain_events(timeout=1)
+            except socket.timeout:
+                ch.connection.heartbeat_tick()
+
+        msg = amqp.Message(type='shutdown', reply_to='amq.rabbitmq.reply-to')
+        ch.basic_publish(msg, routing_key='kuyruk_manager')
 
 
-def start_rpc_thread(sender, worker=None):
-    start_daemon_thread(retry()(_connect_rpc), args=(worker, ))
+def start_connector(sender, worker=None):
+    target = retry(stop_event=worker.shutdown_pending)(_connect)
+    start_thread(target, args=(worker, ))
 
 
-def add_exit_method(sender, worker=None):
-    worker.manager_exit = partial(os._exit, 0)
-
-
-class Manager(object):
+class Manager:
 
     def __init__(self, kuyruk):
         self.kuyruk = kuyruk
-        self.service = _ManagerService()
+        self.workers = {}
+        self.lock = threading.Lock()
         self.requeue = kuyruk.extensions.get("requeue")
 
         self.has_sentry = "sentry" in kuyruk.extensions
         if self.has_sentry and not kuyruk.config.SENTRY_PROJECT_URL:
             raise Exception("SENTRY_PROJECT_URL is not set")
 
-        worker_start.connect(start_rpc_thread, sender=kuyruk, weak=False)
-        worker_init.connect(add_exit_method, sender=kuyruk, weak=False)
+        worker_start.connect(start_connector, sender=kuyruk, weak=False)
 
         kuyruk.extensions["manager"] = self
 
-    def start_rpc_server(self):
-        s = ThreadedServer(self.service,
-                           hostname=self.kuyruk.config.MANAGER_LISTEN_HOST,
-                           port=self.kuyruk.config.MANAGER_LISTEN_PORT)
-        start_daemon_thread(s.start)
+    def _accept(self):
+        with self.kuyruk.channel() as ch:
+            ch.queue_declare('kuyruk_manager', exclusive=True)
+            ch.basic_consume('kuyruk_manager', no_ack=True,
+                             callback=self._handle_worker_message)
+            while True:
+                try:
+                    ch.connection.drain_events(timeout=1)
+                except socket.timeout:
+                    ch.connection.heartbeat_tick()
+
+    def _handle_worker_message(self, message):
+        message_type = message.type
+        reply_to = message.reply_to
+
+        if message_type == 'stats':
+            stats = json.loads(message.body)
+            with self.lock:
+                try:
+                    worker = self.workers[reply_to]
+                except KeyError:
+                    worker = _Worker(reply_to, stats)
+                    self.workers[reply_to] = worker
+                else:
+                    worker.stats = stats
+
+        elif message_type == 'shutdown':
+            with self.lock:
+                try:
+                    del self.workers[reply_to]
+                except KeyError:
+                    pass
+
+    def _clean_workers(self):
+        while True:
+            sleep(10)
+            with self.lock:
+                now = datetime.utcnow()
+                for worker in list(self.workers.values()):
+                    if now - worker.updated_at > timedelta(seconds=10):
+                        del self.workers[worker.reply_to]
 
     def flask_blueprint(self):
         b = Blueprint("kuyruk_manager", __name__)
@@ -129,18 +186,19 @@ class Manager(object):
         working = request.args.get('working')
 
         workers = {}
-        for addr, worker in self.service.workers.items():
-            if hostname and hostname != worker.stats.get('hostname', ''):
-                continue
-            if queue and queue not in worker.stats.get('queues', []):
-                continue
-            if consuming and not worker.stats.get('consuming', False):
-                continue
-            if working and not worker.stats.get('current_task', None):
-                continue
-            workers[addr] = worker
+        with self.lock:
+            for reply_to, worker in self.workers.items():
+                if hostname and hostname != worker.stats.get('hostname', ''):
+                    continue
+                if queue and queue not in worker.stats.get('queues', []):
+                    continue
+                if consuming and not worker.stats.get('consuming', False):
+                    continue
+                if working and not worker.stats.get('current_task', None):
+                    continue
+                workers[reply_to] = worker
 
-        return render_template('workers.html', sockets=workers)
+        return render_template('workers.html', workers=workers)
 
     def _failed_tasks(self):
         tasks = self.requeue.redis.hvals('failed_tasks')
@@ -157,17 +215,22 @@ class Manager(object):
         return jsonify(tasks=self._failed_tasks())
 
     def _post_action(self):
-        addr = (request.args['host'], int(request.args['port']))
-        worker = self.service.workers[addr]
-        f = getattr(worker.conn.root, request.form['action'])
-        rpyc.async_(f)()
+        body = json.dumps({'action': request.form['action']})
+        msg = amqp.Message(body)
+        with self.kuyruk.channel() as ch:
+            ch.basic_publish(msg, '', request.args['id'])
+
         sleep(ACTION_WAIT_TIME)
         return redirect_back()
 
     def _post_action_all(self):
-        for addr, worker in self.service.workers.items():
-            f = getattr(worker.conn.root, request.form['action'])
-            rpyc.async_(f)()
+        body = json.dumps({'action': request.form['action']})
+        msg = amqp.Message(body)
+        with self.kuyruk.channel() as ch:
+            with self.lock:
+                for id in self.workers:
+                    ch.basic_publish(msg, '', id)
+
         sleep(ACTION_WAIT_TIME)
         return redirect_back()
 
@@ -253,102 +316,61 @@ def redirect_back():
     return 'Go back'
 
 
-class _ManagerService(rpyc.Service):
-    def __init__(self):
-        self.workers = {}
-        super().__init__()
-
-    def on_connect(self, conn):
-        addr = conn._config['endpoints'][1]
-        logger.info("Client connected: %s", addr)
-        worker = _Worker(conn)
-        start_daemon_thread(target=worker._read_stats)
-        self.workers[addr] = worker
-
-    def on_disconnect(self, conn):
-        addr = conn._config['endpoints'][1]
-        logger.info("Client disconnected: %s", addr)
-        del self.workers[addr]
+_hostname = socket.gethostname()
+_pid = os.getpid()
 
 
-class _WorkerService(rpyc.Service):
-    def __init__(self, worker):
-        self.worker = worker
-        super().__init__()
-
-    def exposed_warm_shutdown(self):
-        return self.worker.shutdown()
-
-    def exposed_cold_shutdown(self):
-        return self.worker.manager_exit()
-
-    def exposed_quit_task(self):
-        return self.worker.drop_task()
-
-    def exposed_get_stats(self):
-        return {
-            'hostname': socket.gethostname(),
-            'uptime': int(self.worker.uptime),
-            'pid': os.getpid(),
-            'version': kuyruk.__version__,
-            'current_task': getattr(self.worker.current_task, "name", None),
-            'current_args': self.worker.current_args,
-            'current_kwargs': self.worker.current_kwargs,
-            'consuming': self.worker.consuming,
-            'queues': self.worker.queues,
-        }
+def _get_stats(worker):
+    return {
+        'hostname': _hostname,
+        'uptime': int(worker.uptime),
+        'pid': _pid,
+        'version': kuyruk.__version__,
+        'current_task': getattr(worker.current_task, "name", None),
+        'current_args': worker.current_args,
+        'current_kwargs': worker.current_kwargs,
+        'consuming': worker.consuming,
+        'queues': worker.queues,
+    }
 
 
 @total_ordering
 class _Worker:
-    def __init__(self, conn):
-        self.conn = conn
-        self.stats = {}
+
+    def __init__(self, reply_to, stats):
+        self.reply_to = reply_to
+        self.update(stats)
 
     def __lt__(self, other):
-        if not self.sort_key:
-            return False
-
-        if not other.sort_key:
-            return True
-
-        # TODO there is a bug with this comparison statement.
-        # Eat the error until the fix.
-        #   TypeError: unorderable types: NoneType() < str()
-        try:
-            return self.sort_key < other.sort_key
-        except Exception:
-            return True
-
-    def _read_stats(self):
-        while True:
-            try:
-                proxy_obj = self.conn.root.get_stats()
-                self.stats = rpyc.classic.obtain(proxy_obj)
-            except Exception as e:
-                logger.error("%s", e)
-                try:
-                    self.conn.close()
-                except Exception:
-                    pass
-                return
-            sleep(1)
+        a, b = self._sort_key, other._sort_key
+        return _lt_tuples(a, b)
 
     @property
-    def sort_key(self):
+    def _sort_key(self):
         order = ('hostname', 'queues', 'uptime', 'pid')
-        # TODO replace get_stat with operator.itemgetter
-        return tuple(self.get_stat(attr) for attr in order)
+        return operator.itemgetter(*order)(self.stats)
 
-    def get_stat(self, name):
-        return self.stats.get(name, None)
+    def update(self, stats):
+        self.stats = stats
+        self.updated_at = datetime.utcnow()
+
+
+def _lt_tuples(t1, t2):
+    for i in range(min(len(t1), len(t2))):
+        a, b = t1[i], t2[i]
+        if not a:
+            return False
+        if not b:
+            return True
+        return a < b
 
 
 def run_manager(kuyruk, args):
     manager = kuyruk.extensions["manager"]
-    manager.start_rpc_server()
-
     app = manager.flask_application()
+
+    start_thread(manager._accept, daemon=True)
+    start_thread(manager._clean_workers, daemon=True)
     waitress.serve(
             app,
             host=kuyruk.config.MANAGER_LISTEN_HOST_HTTP,

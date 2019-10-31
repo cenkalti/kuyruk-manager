@@ -1,7 +1,7 @@
 <!DOCTYPE html>
-{% macro action_button(addr, name, display) %}
+{% macro action_button(id, name, display) %}
     <button type="submit" name='action' value="{{ name }}"
-            formaction="{{ url_for('kuyruk_manager.action', host=addr[0], port=addr[1]) }}"
+            formaction="{{ url_for('kuyruk_manager.action', id=id) }}"
             >{{ display }}</button>
 {% endmacro -%}
 {% macro action_button_all(type, name, display) %}

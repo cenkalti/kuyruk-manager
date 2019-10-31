@@ -5,10 +5,8 @@
         <table>
             <tr>
                 <th>Hostname</th>
-                <th>IP</th>
-                <th>Port</th>
-                <th>Uptime</th>
                 <th>PID</th>
+                <th>Uptime</th>
                 <th>Version</th>
                 <th>Queues</th>
                 <th>Consuming</th>
@@ -17,11 +15,10 @@
                 <th>Kwargs</th>
                 <th>Actions</th>
             </tr>
-            {% for addr, worker in sockets|dictsort(by='value') %}
+            {% for id, worker in workers|dictsort(by='value') %}
             <tr>
                 <td>{{ worker.stats.hostname }}</td>
-                <td>{{ addr[0] }}</td>
-                <td>{{ addr[1] }}</td>
+                <td>{{ worker.stats.pid }}</td>
                 <td
                   {# Higlight over working workers #}
                   {% if manager.kuyruk.config.MAX_WORKER_RUN_TIME and worker.stats.uptime > manager.kuyruk.config.MAX_WORKER_RUN_TIME %}
@@ -30,7 +27,6 @@
 
                   {{ human_time(worker.stats.uptime|default(0)) }}
                 </td>
-                <td>{{ worker.stats.pid }}</td>
                 <td>{{ worker.stats.version }}</td>
                 <td>{{ worker.stats.queues|join(', ') }}</td>
                 <td>{{ worker.stats.consuming }}</td>
@@ -38,17 +34,15 @@
                 <td>{{ worker.stats.current_args|default('', true) }}</td>
                 <td>{{ worker.stats.current_kwargs|default('', true) }}</td>
                 <td>
-                    {{ action_button(addr, 'warm_shutdown', 'Shutdown') }}
-                    {{ action_button(addr, 'cold_shutdown', 'Abort') }}
-                    {{ action_button(addr, 'quit_task', 'Drop Task') }}
+                    {{ action_button(id, 'warm_shutdown', 'Shutdown') }}
+                    {{ action_button(id, 'cold_shutdown', 'Abort') }}
+                    {{ action_button(id, 'quit_task', 'Drop Task') }}
                 </td>
             </tr>
             {% endfor %}
 
             {% if not request.args.ppid %}
             <tr>
-                <td></td>
-                <td></td>
                 <td></td>
                 <td></td>
                 <td></td>
