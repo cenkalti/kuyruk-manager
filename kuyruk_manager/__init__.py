@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 CONFIG = {
     "MANAGER_LISTEN_HOST_HTTP": "127.0.0.1",
     "MANAGER_LISTEN_PORT_HTTP": 16500,
+    "MANAGER_STATS_INTERVAL": 1,
     "SENTRY_PROJECT_URL": None,
 }
 
@@ -82,7 +83,8 @@ def _connect(worker):
             ch.basic_publish(msg, routing_key='kuyruk_manager')
             try:
                 ch.connection.heartbeat_tick()
-                ch.connection.drain_events(timeout=1)
+                ch.connection.drain_events(
+                        timeout=worker.kuyruk.config.MANAGER_STATS_INTERVAL)
             except socket.timeout:
                 pass
 
@@ -146,7 +148,7 @@ class Manager:
 
     def _clean_workers(self):
         while True:
-            sleep(10)
+            sleep(self.kuyruk.config.MANAGER_STATS_INTERVAL)
             with self.lock:
                 now = datetime.utcnow()
                 for worker in list(self.workers.values()):
