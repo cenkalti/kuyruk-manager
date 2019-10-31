@@ -133,7 +133,7 @@ class Manager:
                     worker = _Worker(reply_to, stats)
                     self.workers[reply_to] = worker
                 else:
-                    worker.stats = stats
+                    worker.update(stats)
 
         elif message_type == 'shutdown':
             with self.lock:
