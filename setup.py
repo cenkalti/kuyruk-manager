@@ -21,6 +21,7 @@ setup(
         'kuyruk.commands': 'manager = kuyruk_manager:__init__.command'},
     description='Manage Kuyruk workers.',
     long_description=open('README.md').read(),
+    long_description_content_type='text/markdown',
     classifiers=[
         'Development Status :: 5 - Production/Stable',
         'License :: OSI Approved :: MIT License',
