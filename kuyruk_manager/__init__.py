@@ -15,7 +15,7 @@ from flask import render_template, redirect, request, url_for, jsonify
 import waitress
 
 import kuyruk
-from kuyruk.signals import worker_init, worker_start
+from kuyruk.signals import worker_start
 
 logger = logging.getLogger(__name__)
 
