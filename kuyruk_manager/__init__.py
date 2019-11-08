@@ -15,7 +15,7 @@ from flask import render_template, redirect, request, url_for, jsonify
 import waitress
 
 import kuyruk
-from kuyruk.signals import worker_start
+from kuyruk.signals import worker_start, worker_shutdown
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ def _connect(worker):
     with worker.kuyruk.channel() as ch:
         ch.basic_consume('amq.rabbitmq.reply-to', no_ack=True,
                          callback=handle_manager_message)
-        while not worker.shutdown_pending.is_set():
+        while not worker._manager_connector_stopped.is_set():
             stats = _get_stats(worker)
             body = json.dumps(stats)
             msg = amqp.Message(body=body, type='stats',
@@ -93,7 +93,15 @@ def _connect(worker):
 
 
 def start_connector(sender, worker=None):
-    start_thread(_connect, args=(worker, ), stop_event=worker.shutdown_pending)
+    worker._manager_connector_stopped = threading.Event()
+    worker._manager_connector_thread = start_thread(
+            _connect, args=(worker, ),
+            stop_event=worker._manager_connector_stopped)
+
+
+def stop_connector(sender, worker=None):
+    worker._manager_connector_stopped.set()
+    worker._manager_connector_thread.join()
 
 
 class Manager:
@@ -109,6 +117,7 @@ class Manager:
             raise Exception("SENTRY_PROJECT_URL is not set")
 
         worker_start.connect(start_connector, sender=kuyruk, weak=False)
+        worker_shutdown.connect(stop_connector, sender=kuyruk, weak=False)
 
         kuyruk.extensions["manager"] = self
 
