@@ -72,7 +72,8 @@ def _connect(worker):
 
         handler()
 
-    with worker.kuyruk.channel() as ch:
+    with worker.kuyruk.new_connection() as conn:
+        ch = conn.channel()
         ch.basic_consume('amq.rabbitmq.reply-to', no_ack=True,
                          callback=handle_manager_message)
         while not worker._manager_connector_stopped.is_set():
@@ -90,6 +91,7 @@ def _connect(worker):
 
         msg = amqp.Message(type='shutdown', reply_to='amq.rabbitmq.reply-to')
         ch.basic_publish(msg, routing_key='kuyruk_manager')
+        ch.close()
 
 
 def start_connector(sender, worker=None):
