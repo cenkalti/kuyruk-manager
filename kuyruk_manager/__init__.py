@@ -124,7 +124,9 @@ class Manager:
         kuyruk.extensions["manager"] = self
 
     def _accept(self):
-        with self.kuyruk.channel() as ch:
+        # kuyruk.channel() would hold the shared connection lock forever.
+        with self.kuyruk.new_connection() as conn:
+            ch = conn.channel()
             ch.queue_declare('kuyruk_manager', exclusive=True)
             ch.basic_consume('kuyruk_manager', no_ack=True,
                              callback=self._handle_worker_message)
@@ -219,7 +221,7 @@ class Manager:
         tasks = self.requeue.redis.hvals('failed_tasks')
         tasks = [t.decode('utf-8') for t in tasks]
         decoder = json.JSONDecoder()
-        tasks = map(decoder.decode, tasks)
+        tasks = [decoder.decode(t) for t in tasks]
         return tasks
 
     def _get_failed_tasks(self):
